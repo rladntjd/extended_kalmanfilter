@@ -74,13 +74,13 @@ class kalman_Filter:
                 self.imu_data = msg
                 self.imu_secs = self.imu_data.header.stamp.secs
                 self.imu_nsecs = self.imu_data.header.stamp.nsecs
-                self.acc_x = float(self.imu_data.linear_acceleration.x)*9.81
-                self.acc_y = float(self.imu_data.linear_acceleration.y)*9.81
-                self.acc_z = float(self.imu_data.linear_acceleration.z)*9.81
+                self.acc_x = float(self.imu_data.linear_acceleration.x)*9.81 - self.acc_bias_er_x
+                self.acc_y = float(self.imu_data.linear_acceleration.y)*9.81 - self.acc_bias_er_y
+                self.acc_z = float(self.imu_data.linear_acceleration.z)*9.81 - self.acc_bias_er_z
 
-                self.gyro_x = float(self.imu_data.angular_velocity.x)
-                self.gyro_y = float(self.imu_data.angular_velocity.y)
-                self.gyro_z = float(self.imu_data.angular_velocity.z)
+                self.gyro_x = float(self.imu_data.angular_velocity.x) - self.gyro_bias_er_x
+                self.gyro_y = float(self.imu_data.angular_velocity.y) - self.gyro_bias_er_y
+                self.gyro_z = float(self.imu_data.angular_velocity.z) - self.gyro_bias_er_z
 
         def mag_raw_data(self, msg):
                 self.mag_data = msg
@@ -192,6 +192,7 @@ class kalman_Filter:
                 self.dt = float(1.0/78.5)
                 self.H =  np.identity(4)
                 self.practice_quat = np.matrix([[1], [0], [0], [0]])
+                self.starting_time = rospy.get_time()
 
 
         def AF_matrix(self, q):  
@@ -310,15 +311,21 @@ class kalman_Filter:
                 return self.H, self.H_error
 
         def error_reset(self):
-                self.pose = self.pose + self.pos_er
-                self.vel = self.vel + self.vel_er
-                self.acc_bias = self.acc_bias + self.acc_bias_er
-                self.gyro_bias = self.gyro_bias + self.gyro_bias_er
-                self.gravity = self.gravity + self.gravity_er 
+                correction_range, correction_range_2 = [0,1,2,3,4,5],[10,11,12,13,14,15,16,17,18]
+                for i in correction_range:
+                        self.X[i,0] += self.X_error[i,0]
+                for i in correction_range_2:
+                        self.X[i,0] += self.X_error[i-1,0]
+                er_quat = quat_mult(self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0], 1, self.angle_er_x, self.angle_er_y, self.angle_er_z)
 
-                self.quat = quat_mult(self.quat[0,0], self.quat[0,0], self.quat[0,0], self.quat[0,0], 0, self.angle_er_x, self.angle_er_y, self.angle_er_z)
-
-                self.X = np.concatenate((self.pose, self.vel, self.quat, self.acc_bias, self.gyro_bias, self.gravity), axis = 0)
+                self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0] = er_quat[0,0], er_quat[1,0], er_quat[2,0], er_quat[3,0]
+                if rospy.get_time() - self.starting_time >15: # after 15 sec bias update start
+                        self.gyro_bias_er_x += self.X_error[9,0]
+                        self.gyro_bias_er_y += self.X_error[10,0]
+                        self.gyro_bias_er_z += self.X_error[11,0]
+                        self.acc_bias_er_x += self.X_error[6,0]
+                        self.acc_bias_er_y += self.X_error[7,0]
+                        self.acc_bias_er_z += self.X_error[8,0]
                 self.X_error = np.matrix([[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],])
 
         def first_cal(self):
@@ -426,9 +433,14 @@ class kalman_Filter:
                 #y = np.matrix([[self.motion_pos_x], [self.motion_pos_y], [self.motion_pos_z],
                 #                [self.motion_vel_x], [self.motion_vel_y], [self.motion_vel_z],
                 #                [self.mag_x], [self.mag_y], [self.mag_z]])
-                y = np.matrix([[self.motion_pos_x], [self.motion_pos_y], [self.motion_pos_z],
-                                [self.motion_vel_x], [self.motion_vel_y], [self.motion_vel_z],
-                                [measured_quaternion[0,0]], [-measured_quaternion[1,0]], [-measured_quaternion[2,0]], [-measured_quaternion[3,0]]])
+                if measured_quaternion[0,0]*self.X[6,0] >0:
+                        y = np.matrix([[self.motion_pos_x], [self.motion_pos_y], [self.motion_pos_z],
+                                        [self.motion_vel_x], [self.motion_vel_y], [self.motion_vel_z],
+                                        [measured_quaternion[0,0]], [-measured_quaternion[1,0]], [-measured_quaternion[2,0]], [-measured_quaternion[3,0]]])
+                else : 
+                        y = np.matrix([[self.motion_pos_x], [self.motion_pos_y], [self.motion_pos_z],
+                                        [self.motion_vel_x], [self.motion_vel_y], [self.motion_vel_z],
+                                        [-measured_quaternion[0,0]], [measured_quaternion[1,0]], [measured_quaternion[2,0]], [measured_quaternion[3,0]]])
                 self.motion_pos_prev_x = self. motion_pos_x
                 self.motion_pos_prev_y = self. motion_pos_y
                 self.motion_pos_prev_z = self. motion_pos_z
@@ -441,29 +453,35 @@ class kalman_Filter:
 
                 # predict part for state and error state
                 X_pre = A*self.X 
-                X_er_pre = F*self.X_error
-                self.R = np.identity(19)*0.0000000001
-                self.R_error = np.zeros((18,18))
+                self.R = np.identity(19)*10**-10
+                
                 Q_1 = np.concatenate((np.identity(6)*0.00001, np.zeros((6,4))), axis = 1)
-                Q_2 = np.concatenate((np.zeros((4,6)), np.identity(4)*0.01), axis = 1)
+                Q_2 = np.concatenate((np.zeros((4,6)), np.identity(4)*0.0001), axis = 1)
                 self.Q = np.concatenate((Q_1, Q_2 ), axis = 0)
-                self.Q_er = np.identity(9)*0.001
                 cov_pre = A*self.Cov*A.T + self.R
-                cov_er_pre = F*self.Cov_error*F.T + self.R_error ######### R matrix has to be set
 
                 #Kalman gain part
                 kal = cov_pre*H.T*np.linalg.inv(H*cov_pre*H.T + self.Q)
-                #kal_er = cov_er_pre*H_er.T*np.linalg.inv(H_er*cov_er_pre*H_er.T + self.Q_er) ########### Q matrix has to be set
-
+                
                 #measurement correction
                 X = X_pre + kal*(y - H*X_pre)
-                #x_er = kal_er*(y - H*X_pre) 
                 self.Cov = (np.identity(19) - kal*H)*cov_pre
-                #self.Cov_error = (np.identity(18) - kal_er*H_er)*cov_er_pre
+                # normalize quaternion
                 norm_q = norm_quat(X[6,0], X[7,0], X[8,0], X[9,0])
-                X[6,0], X[7,0], X[8,0], X[9,0] = norm_q[0,0], norm_q[1,0], norm_q[2,0], norm_q[3,0] # normalize quaternion
+                X[6,0], X[7,0], X[8,0], X[9,0] = norm_q[0,0], norm_q[1,0], norm_q[2,0], norm_q[3,0] 
                 self.X = X
-                #self.X_error = x_er ####################### normalize the quaternion has to be made
+
+                # error_state 
+                
+                X_er_pre = F*self.X_error
+                self.R_error = np.identity(18)*0.000001
+                self.Q_er = np.identity(10)*0.000001
+                cov_er_pre = F*self.Cov_error*F.T + self.R_error ######### R matrix has to be set
+                kal_er = cov_er_pre*H_er.T*np.linalg.inv(H_er*cov_er_pre*H_er.T + self.Q_er) ########### Q matrix has to be set
+                x_er = kal_er*(y - H*X_pre) 
+                self.Cov_error = (np.identity(18) - kal_er*H_er)*cov_er_pre
+                self.X_error = x_er 
+                self.error_reset()
                 self.simulation_pub()
                 
                 self.rate.sleep()
@@ -473,20 +491,22 @@ class kalman_Filter:
                 pose_topic.header.stamp.secs = self.imu_secs
                 pose_topic.header.stamp.nsecs = self.imu_nsecs
                 pose_topic.header.frame_id = "world"
-                pose_topic.pose.pose.position.x =self.X[0,0] # - self.motion_pos_x
+                pose_topic.pose.pose.position.x = self.X[0,0] # - self.motion_pos_x
                 pose_topic.pose.pose.position.y = self.X[1,0] #- self.motion_pos_y
                 pose_topic.pose.pose.position.z = self.X[2,0] #- self.motion_pos_z
-                if self.X[6,0] < 0:
-                        pose_topic.pose.pose.orientation.w = self.X[6,0]
-                        pose_topic.pose.pose.orientation.x = -self.X[7,0]
-                        pose_topic.pose.pose.orientation.y = -self.X[8,0]
-                        pose_topic.pose.pose.orientation.z = -self.X[9,0]
+                simul_quat = quat_mult(self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0], 1/(2**0.5),0,0,-1/(2**0.5))
+                if simul_quat[0,0] < 0:#self.X[6,0] < 0:
+                        
+                        pose_topic.pose.pose.orientation.w = simul_quat[0,0]#self.X[6,0]
+                        pose_topic.pose.pose.orientation.x = -simul_quat[1,0]#-self.X[7,0]
+                        pose_topic.pose.pose.orientation.y = -simul_quat[2,0]#-self.X[8,0]
+                        pose_topic.pose.pose.orientation.z = -simul_quat[3,0]#-self.X[9,0]
                         
                 else :
-                        pose_topic.pose.pose.orientation.w = -self.X[6,0]
-                        pose_topic.pose.pose.orientation.x = self.X[7,0]
-                        pose_topic.pose.pose.orientation.y = self.X[8,0]
-                        pose_topic.pose.pose.orientation.z = self.X[9,0]
+                        pose_topic.pose.pose.orientation.w = -simul_quat[0,0]#-self.X[6,0]
+                        pose_topic.pose.pose.orientation.x = simul_quat[1,0]#self.X[7,0]
+                        pose_topic.pose.pose.orientation.y = simul_quat[2,0]#self.X[8,0]
+                        pose_topic.pose.pose.orientation.z = simul_quat[3,0]#self.X[9,0]
                 pose_topic.pose.covariance = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.0289, 0.0289, 0.1207,0,0,0,0.0289, 0.0289, 0.1207,0,0,0,0.1207,0.1207,0.5041]
                 self.Kalman_cov_pub.publish(pose_topic)
 
