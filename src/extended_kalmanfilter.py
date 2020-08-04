@@ -74,9 +74,9 @@ class kalman_Filter:
                 self.imu_data = msg
                 self.imu_secs = self.imu_data.header.stamp.secs
                 self.imu_nsecs = self.imu_data.header.stamp.nsecs
-                self.acc_x = float(self.imu_data.linear_acceleration.x)*9.81 - self.acc_bias_er_x
-                self.acc_y = float(self.imu_data.linear_acceleration.y)*9.81 - self.acc_bias_er_y
-                self.acc_z = float(self.imu_data.linear_acceleration.z)*9.81 - self.acc_bias_er_z
+                self.acc_x = float(self.imu_data.linear_acceleration.x)*9.81 + self.acc_bias_er_x
+                self.acc_y = float(self.imu_data.linear_acceleration.y)*9.81 + self.acc_bias_er_y
+                self.acc_z = float(self.imu_data.linear_acceleration.z)*9.81 + self.acc_bias_er_z
 
                 self.gyro_x = float(self.imu_data.angular_velocity.x) - self.gyro_bias_er_x
                 self.gyro_y = float(self.imu_data.angular_velocity.y) - self.gyro_bias_er_y
@@ -316,16 +316,30 @@ class kalman_Filter:
                         self.X[i,0] += self.X_error[i,0]
                 for i in correction_range_2:
                         self.X[i,0] += self.X_error[i-1,0]
-                er_quat = quat_mult(self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0], 1, self.angle_er_x, self.angle_er_y, self.angle_er_z)
+                er_quat = quat_mult(self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0], 1, self.gyro_bias_er_x, self.gyro_bias_er_y, self.gyro_bias_er_z)
 
                 self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0] = er_quat[0,0], er_quat[1,0], er_quat[2,0], er_quat[3,0]
-                if rospy.get_time() - self.starting_time >15: # after 15 sec bias update start
-                        self.gyro_bias_er_x += self.X_error[9,0]
-                        self.gyro_bias_er_y += self.X_error[10,0]
-                        self.gyro_bias_er_z += self.X_error[11,0]
-                        self.acc_bias_er_x += self.X_error[6,0]
-                        self.acc_bias_er_y += self.X_error[7,0]
-                        self.acc_bias_er_z += self.X_error[8,0]
+                now = rospy.get_time()
+                #print(now - self.starting_time)
+                print(self.acc_bias_er_x, self.acc_bias_er_y, self.acc_bias_er_z)
+                if now - self.starting_time >2: # after 15 sec bias update start
+                        #self.gyro_bias_er_x += self.X_error[9,0]
+                        #self.gyro_bias_er_y += self.X_error[10,0]
+                        #self.gyro_bias_er_z += self.X_error[11,0]
+                        '''
+                        if self.acc_bias_er_x < 15 and self.acc_bias_er_x > -15 :
+                                self.acc_bias_er_x += self.X_error[6,0]
+                        else :
+                                pass
+                        if self.acc_bias_er_y < 15 and self.acc_bias_er_y > -15 :
+                                self.acc_bias_er_y += self.X_error[7,0]
+                        else :
+                                pass
+                        if self.acc_bias_er_z < 15 and self.acc_bias_er_z > -15 :
+                                self.acc_bias_er_z += self.X_error[8,0]
+                        else :
+                                pass
+                        '''
                 self.X_error = np.matrix([[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],[0],])
 
         def first_cal(self):
