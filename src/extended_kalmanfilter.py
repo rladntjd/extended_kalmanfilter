@@ -187,7 +187,7 @@ class kalman_Filter:
                 self.correction_quat = np.matrix([[0], [0], [0], [0]]) # correct the difference between motion capture and IMU
                 self.X = np.concatenate((self.pos, self.vel, self.quat, self.acc_bias, self.gyro_bias, self.gravity), axis = 0)
                 self.X_error = np.concatenate((self.pos_er, self.vel_er, self.quat_er, self.acc_bias_er, self.gyro_bias_er, self.gravity_er), axis = 0)
-                self.Cov = np.identity(19)*0.01
+                self.Cov = np.identity(19)*0.0001
                 self.Cov_error = np.identity(18)*0.000001
                 self.dt = float(1.0/78.5)
                 self.H =  np.identity(4)
@@ -326,10 +326,11 @@ class kalman_Filter:
                 self.acc_bias_er_x += self.X_error[6,0]
                 self.acc_bias_er_y += self.X_error[7,0]
                 self.acc_bias_er_z += self.X_error[8,0]
-                self.gravity[0,0] += self.X_error[12,0]
-                self.gravity[1,0] += self.X_error[13,0]
-                self.gravity[2,0] += self.X_error[14,0]
                 '''
+                #self.gravity[0,0] += self.X_error[15,0]
+                #self.gravity[1,0] += self.X_error[16,0]
+                #self.gravity[2,0] += self.X_error[17,0]
+                
                 #print(now - self.starting_time)
                 #print(self.acc_bias_er_x, self.acc_bias_er_y, self.acc_bias_er_z)
                 print(self.X_error[6,0])
@@ -397,7 +398,7 @@ class kalman_Filter:
                 IMU_global = quat_mult(acc_quat[0,0],acc_quat[1,0], acc_quat[2,0], acc_quat[3,0], mag_quat[0,0], mag_quat[1,0], mag_quat[2,0], mag_quat[3,0] )
                 IMU_global = norm_quat(IMU_global[0,0], IMU_global[1,0], IMU_global[2,0], IMU_global[3,0])
                 motion_global = norm_quat(self.motion_cal_w, self.motion_cal_x, self.motion_cal_y, self.motion_cal_z)
-                print(motion_global)
+                #print(motion_global)
                 self.correction_quat = np.matrix([[1],[0], [0], [0]])#quat_mult(motion_global[0,0], motion_global[1,0], motion_global[2,0], motion_global[3,0], IMU_global[0,0], -IMU_global[1,0], -IMU_global[2,0], -IMU_global[3,0])
                 self.global_mag = quat_2_matrix(self.correction_quat[0,0], -self.correction_quat[1,0], -self.correction_quat[2,0], -self.correction_quat[3,0]) * np.matrix([[self.mag_cal_x], [self.mag_cal_y], [self.mag_cal_z]])
                 #self.gravity = -quat_2_matrix(self.correction_quat[0,0], self.correction_quat[1,0], self.correction_quat[2,0], self.correction_quat[3,0])*np.matrix([[self.acc_cal_x], [self.acc_cal_y], [self.acc_cal_z]])
@@ -473,11 +474,12 @@ class kalman_Filter:
         
         def Ex_Kalman(self):
                 A, F = self.AF_matrix(np.matrix([[self.X[6,0]], [self.X[7,0]], [self.X[8,0]], [self.X[9,0]]])) # putting the quaternion
-                H, H_er = self.H_matrix(np.matrix([[self.X[6,0]], [self.X[7,0]], [self.X[8,0]], [self.X[9,0]]]))
+                #H, H_er = self.H_matrix(np.matrix([[self.X[6,0]], [self.X[7,0]], [self.X[8,0]], [self.X[9,0]]]))
                 y = self.measurement()
 
                 # predict part for state and error state
                 X_pre = A*self.X 
+                H, H_er = self.H_matrix(np.matrix([[X_pre[6,0]], [X_pre[7,0]], [X_pre[8,0]], [X_pre[9,0]]]))
                 self.R = np.identity(19)*10**-10
                 
                 Q_1 = np.concatenate((np.identity(6)*0.00001, np.zeros((6,4))), axis = 1)
@@ -512,11 +514,37 @@ class kalman_Filter:
                 
                 self.rate.sleep()
 
+        def Iterative_kalman_filter(self):
+                A, F = self.AF_matrix(np.matrix([[self.X[6,0]], [self.X[7,0]], [self.X[8,0]], [self.X[9,0]]])) # putting the quaternion
+                H, H_er = self.H_matrix(np.matrix([[self.X[6,0]], [self.X[7,0]], [self.X[8,0]], [self.X[9,0]]]))
+                y = self.measurement()
+
+                # predict part for state and error state
+                X_pre = A*self.X 
+                self.R = np.identity(19)*10**-10
+                
+                Q_1 = np.concatenate((np.identity(6)*0.00001, np.zeros((6,4))), axis = 1)
+                Q_2 = np.concatenate((np.zeros((4,6)), np.identity(4)*0.0001), axis = 1)
+                self.Q = np.concatenate((Q_1, Q_2 ), axis = 0)
+                cov_pre = A*self.Cov*A.T + self.R
+
+                #Kalman gain part
+                kal = cov_pre*H.T*np.linalg.inv(H*cov_pre*H.T + self.Q)
+                
+                #measurement correction
+                X = X_pre + kal*(y - H*X_pre)
+                self.Cov = (np.identity(19) - kal*H)*cov_pre
+                # normalize quaternion
+                norm_q = norm_quat(X[6,0], X[7,0], X[8,0], X[9,0])
+                X[6,0], X[7,0], X[8,0], X[9,0] = norm_q[0,0], norm_q[1,0], norm_q[2,0], norm_q[3,0] 
+                self.X = X
+
         def simulation_pub(self):
                 pose_topic = PoseWithCovarianceStamped()
                 pose_topic.header.stamp.secs = self.imu_secs
                 pose_topic.header.stamp.nsecs = self.imu_nsecs
                 pose_topic.header.frame_id = "world"
+                print(self.X[0,0] - self.motion_pos_x)
                 pose_topic.pose.pose.position.x = self.X[0,0] # - self.motion_pos_x
                 pose_topic.pose.pose.position.y = self.X[1,0] #- self.motion_pos_y
                 pose_topic.pose.pose.position.z = self.X[2,0] #- self.motion_pos_z
