@@ -187,7 +187,7 @@ class kalman_Filter:
                 self.correction_quat = np.matrix([[0], [0], [0], [0]]) # correct the difference between motion capture and IMU
                 self.X = np.concatenate((self.pos, self.vel, self.quat, self.acc_bias, self.gyro_bias, self.gravity), axis = 0)
                 self.X_error = np.concatenate((self.pos_er, self.vel_er, self.quat_er, self.acc_bias_er, self.gyro_bias_er, self.gravity_er), axis = 0)
-                self.Cov = np.identity(19)*0.0001
+                self.Cov = np.identity(19)*1
                 self.Cov_error = np.identity(18)*0.000001
                 self.dt = float(1.0/78.5)
                 self.H =  np.identity(4)
