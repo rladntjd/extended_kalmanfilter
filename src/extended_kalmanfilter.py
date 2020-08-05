@@ -311,17 +311,28 @@ class kalman_Filter:
                 return self.H, self.H_error
 
         def error_reset(self):
+                now = rospy.get_time()
                 correction_range, correction_range_2 = [0,1,2,3,4,5],[10,11,12,13,14,15,16,17,18]
                 for i in correction_range:
                         self.X[i,0] += self.X_error[i,0]
                 for i in correction_range_2:
                         self.X[i,0] += self.X_error[i-1,0]
-                er_quat = quat_mult(self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0], 1, self.gyro_bias_er_x, self.gyro_bias_er_y, self.gyro_bias_er_z)
-
-                self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0] = er_quat[0,0], er_quat[1,0], er_quat[2,0], er_quat[3,0]
-                now = rospy.get_time()
+                er_quat = quat_mult(self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0], 1, 0.5*self.X_error[6,0], 0.5*self.X_error[7,0], 0.5*self.X_error[8,0])
+                #self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0] = er_quat[0,0], er_quat[1,0], er_quat[2,0], er_quat[3,0]
+                '''
+                self.gyro_bias_er_x += self.X_error[9,0]
+                self.gyro_bias_er_y += self.X_error[10,0]
+                self.gyro_bias_er_z += self.X_error[11,0]
+                self.acc_bias_er_x += self.X_error[6,0]
+                self.acc_bias_er_y += self.X_error[7,0]
+                self.acc_bias_er_z += self.X_error[8,0]
+                self.gravity[0,0] += self.X_error[12,0]
+                self.gravity[1,0] += self.X_error[13,0]
+                self.gravity[2,0] += self.X_error[14,0]
+                '''
                 #print(now - self.starting_time)
-                print(self.acc_bias_er_x, self.acc_bias_er_y, self.acc_bias_er_z)
+                #print(self.acc_bias_er_x, self.acc_bias_er_y, self.acc_bias_er_z)
+                print(self.X_error[6,0])
                 if now - self.starting_time >2: # after 15 sec bias update start
                         #self.gyro_bias_er_x += self.X_error[9,0]
                         #self.gyro_bias_er_y += self.X_error[10,0]
@@ -487,12 +498,13 @@ class kalman_Filter:
 
                 # error_state 
                 
-                X_er_pre = F*self.X_error
+                #X_er_pre = F*self.X_error
                 self.R_error = np.identity(18)*0.000001
                 self.Q_er = np.identity(10)*0.000001
                 cov_er_pre = F*self.Cov_error*F.T + self.R_error ######### R matrix has to be set
                 kal_er = cov_er_pre*H_er.T*np.linalg.inv(H_er*cov_er_pre*H_er.T + self.Q_er) ########### Q matrix has to be set
-                x_er = kal_er*(y - H*X_pre) 
+                x_er = kal_er*(y - H*self.X)
+                
                 self.Cov_error = (np.identity(18) - kal_er*H_er)*cov_er_pre
                 self.X_error = x_er 
                 self.error_reset()
@@ -508,7 +520,9 @@ class kalman_Filter:
                 pose_topic.pose.pose.position.x = self.X[0,0] # - self.motion_pos_x
                 pose_topic.pose.pose.position.y = self.X[1,0] #- self.motion_pos_y
                 pose_topic.pose.pose.position.z = self.X[2,0] #- self.motion_pos_z
+                #simul_quat = norm_quat(self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0])
                 simul_quat = quat_mult(self.X[6,0], self.X[7,0], self.X[8,0], self.X[9,0], 1/(2**0.5),0,0,-1/(2**0.5))
+                #simul_quat = quat_mult(simul_quat[0,0], simul_quat[1,0], simul_quat[2,0], simul_quat[3,0], self.motion_cal_w, self.motion_cal_x, self.motion_cal_y, self.motion_cal_z)
                 if simul_quat[0,0] < 0:#self.X[6,0] < 0:
                         
                         pose_topic.pose.pose.orientation.w = simul_quat[0,0]#self.X[6,0]
